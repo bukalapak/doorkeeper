@@ -6,32 +6,8 @@ module Doorkeeper
     include Models::Expirable
     include Models::Revocable
     include Models::Accessible
+    include Models::Orderable
     include Models::Scopes
-    include ActiveModel::MassAssignmentSecurity if defined?(::ProtectedAttributes)
-
-    included do
-      belongs_to_options = {
-        class_name: 'Doorkeeper::Application',
-        inverse_of: :access_tokens
-      }
-      if defined?(ActiveRecord::Base) && ActiveRecord::VERSION::MAJOR >= 5
-        belongs_to_options[:optional] = true
-      end
-
-      belongs_to :application, belongs_to_options
-
-      validates :token, presence: true, uniqueness: true
-      validates :refresh_token, uniqueness: true, if: :use_refresh_token?
-
-      # @attr_writer [Boolean, nil] use_refresh_token
-      #   indicates the possibility of using refresh token
-      attr_writer :use_refresh_token
-
-      before_validation :generate_token, on: :create
-      before_validation :generate_refresh_token,
-                        on: :create,
-                        if: :use_refresh_token?
-    end
 
     module ClassMethods
       # Returns an instance of the Doorkeeper::AccessToken with
@@ -107,7 +83,7 @@ module Doorkeeper
       # @param param_scopes [String]
       #   scopes from params
       #
-      # @return [Boolean] true if all scopes and blank or matches
+      # @return [Boolean] true if all scopes are blank or matches
       #   and false in other cases
       #
       def scopes_match?(token_scopes, param_scopes)
@@ -227,7 +203,7 @@ module Doorkeeper
     # @return [String] refresh token value
     #
     def generate_refresh_token
-      write_attribute :refresh_token, UniqueToken.generate
+      self.refresh_token = UniqueToken.generate
     end
 
     # Generates and sets the token value with the
@@ -243,12 +219,7 @@ module Doorkeeper
     def generate_token
       self.created_at ||= Time.now.utc
 
-      generator = token_generator
-      unless generator.respond_to?(:generate)
-        raise Errors::UnableToGenerateToken, "#{generator} does not respond to `.generate`."
-      end
-
-      self.token = generator.generate(
+      self.token = token_generator.generate(
         resource_owner_id: resource_owner_id,
         scopes: scopes,
         application: application,
@@ -259,7 +230,11 @@ module Doorkeeper
 
     def token_generator
       generator_name = Doorkeeper.configuration.access_token_generator
-      generator_name.constantize
+      generator = generator_name.constantize
+
+      return generator if generator.respond_to?(:generate)
+
+      raise Errors::UnableToGenerateToken, "#{generator} does not respond to `.generate`."
     rescue NameError
       raise Errors::TokenGeneratorNotFound, "#{generator_name} not found"
     end
